@@ -5,7 +5,7 @@ import (
 
 	"github.com/F1zm0n/blocker/crypto"
 	"github.com/F1zm0n/blocker/proto"
-	pb "github.com/golang/protobuf/proto"
+	pb "google.golang.org/protobuf/proto"
 )
 
 func SignTransaction(pk crypto.PrivateKey, tx *proto.Transaction) crypto.Signature {
@@ -27,10 +27,12 @@ func VerifyTransaction(tx *proto.Transaction) bool {
 			sig    = crypto.SignatureFromBytes(input.Signature)
 			pubKey = crypto.PublicKeyFromBytes(input.PublicKey)
 		)
+		tmpSig := input.Signature
 		input.Signature = nil
 		if !sig.Verify(pubKey, HashTransaction(tx)) {
 			return false
 		}
+		input.Signature = tmpSig
 	}
 	return true
 
