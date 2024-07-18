@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"log"
 	"log/slog"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"github.com/F1zm0n/blocker/crypto"
 	"github.com/F1zm0n/blocker/proto"
 	"github.com/F1zm0n/blocker/types"
+	"github.com/bytedance/sonic"
+	"github.com/dgraph-io/badger/v4"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
@@ -19,18 +22,108 @@ import (
 
 const blockDur = time.Second * 5
 
-type MemPool struct {
+type MemPool interface {
+	Clear() ([]*proto.Transaction, error)
+	Len() int
+	Has(tx *proto.Transaction) error
+	Put(tx *proto.Transaction) error
+}
+
+type BadgerMemPool struct {
+	len int
+	db  *badger.DB
+}
+
+func NewBadgerMemPool(db *badger.DB) MemPool {
+	len, err := calculateLength(db)
+	if err != nil {
+		panic(err)
+	}
+	return &BadgerMemPool{
+		len: len,
+		db:  db,
+	}
+}
+
+func (b *BadgerMemPool) Clear() ([]*proto.Transaction, error) {
+	var txs []*proto.Transaction
+	counter := 0
+	err := b.db.Update(func(txn *badger.Txn) error {
+
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			err := item.Value(func(val []byte) error {
+				var tx *proto.Transaction = &proto.Transaction{}
+				if err := sonic.Unmarshal(val, tx); err != nil {
+					return err
+				}
+				txs = append(txs, tx)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			err = txn.Delete(it.Item().Key())
+			if err != nil {
+				return err
+			}
+			counter += 1
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	b.len -= counter
+	return txs, nil
+}
+
+func (b *BadgerMemPool) Has(tx *proto.Transaction) error {
+	err := b.db.View(func(txn *badger.Txn) error {
+		_, err := txn.Get([]byte(hex.EncodeToString(types.HashTransaction(tx))))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	return err
+}
+
+func (b *BadgerMemPool) Len() int {
+	return b.len
+}
+
+func (b *BadgerMemPool) Put(tx *proto.Transaction) error {
+	err := b.db.Update(func(txn *badger.Txn) error {
+		byts, err := sonic.Marshal(tx)
+		if err != nil {
+			return err
+		}
+		return txn.Set([]byte(hex.EncodeToString(types.HashTransaction(tx))), byts)
+	})
+	if err != nil {
+		return err
+	}
+	b.len += 1
+	return nil
+}
+
+type MemoryMemPool struct {
 	pool map[string]*proto.Transaction
 	mu   sync.RWMutex
 }
 
-func NewMemPool() *MemPool {
-	return &MemPool{
+func NewMemoryMemPool() MemPool {
+	return &MemoryMemPool{
 		pool: map[string]*proto.Transaction{},
+		mu:   sync.RWMutex{},
 	}
 }
 
-func (m *MemPool) Clear() []*proto.Transaction {
+func (m *MemoryMemPool) Clear() ([]*proto.Transaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -40,32 +133,36 @@ func (m *MemPool) Clear() []*proto.Transaction {
 		p = append(p, v)
 	}
 
-	return p
+	return p, nil
 }
 
-func (m *MemPool) Len() int {
+func (m *MemoryMemPool) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.pool)
 }
 
-func (m *MemPool) Has(tx *proto.Transaction) bool {
+func (m *MemoryMemPool) Has(tx *proto.Transaction) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, ok := m.pool[hex.EncodeToString(types.HashTransaction(tx))]
-	return ok
+	if !ok {
+		return errors.New("transaction doesn't exist")
+	}
+	return nil
 }
 
-func (m *MemPool) Add(tx *proto.Transaction) bool {
-	if m.Has(tx) {
-		return false
+func (m *MemoryMemPool) Put(tx *proto.Transaction) error {
+	err := m.Has(tx)
+	if err != nil {
+		return err
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.pool[hex.EncodeToString(types.HashTransaction(tx))] = tx
-	return true
+	return nil
 }
 
 type ServerConfig struct {
@@ -78,12 +175,12 @@ type Node struct {
 	ServerConfig
 	mu      sync.RWMutex
 	peers   map[proto.NodeClient]*proto.Version
-	memPool *MemPool
+	memPool MemPool
 	sl      *slog.Logger
 	proto.UnimplementedNodeServer
 }
 
-func New(sl *slog.Logger, memPool *MemPool, cfg ServerConfig) Node {
+func New(sl *slog.Logger, memPool MemPool, cfg ServerConfig) Node {
 	return Node{
 		ServerConfig:            cfg,
 		mu:                      sync.RWMutex{},
@@ -97,14 +194,16 @@ func New(sl *slog.Logger, memPool *MemPool, cfg ServerConfig) Node {
 func (n *Node) HandleTransaction(ctx context.Context, req *proto.Transaction) (*proto.Ack, error) {
 	p, _ := peer.FromContext(ctx)
 
-	if n.memPool.Add(req) {
-		n.sl.Info("received tx", slog.String("remote_node", p.Addr.String()))
-		go func() {
-			if err := n.broadcast(context.Background(), req); err != nil {
-				n.sl.Error("broadcast error", slog.String("error", err.Error()))
-			}
-		}()
+	err := n.memPool.Put(req)
+	if err != nil {
+		return nil, err
 	}
+	n.sl.Info("received tx", slog.String("remote_node", p.Addr.String()))
+	go func() {
+		if err := n.broadcast(context.Background(), req); err != nil {
+			n.sl.Error("broadcast error", slog.String("error", err.Error()))
+		}
+	}()
 
 	return &proto.Ack{}, nil
 }
@@ -131,7 +230,11 @@ func (n *Node) validatorLoop() {
 	ticker := time.NewTicker(blockDur)
 	for {
 		<-ticker.C
-		txx := n.memPool.Clear()
+		txx, err := n.memPool.Clear()
+		if err != nil {
+			l.Error("error clearing memory pool", slog.String("error", err.Error()))
+			continue
+		}
 		l.Warn("time to create a new block", slog.Int("len_tx", len(txx)))
 	}
 }

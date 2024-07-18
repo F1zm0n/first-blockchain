@@ -13,36 +13,6 @@ import (
 
 const baseSeed = "e5f05fafb2b46ede8984a1b3c1ae585203b524c4a1abc40a077655d09893bd2b"
 
-type HeaderList struct {
-	headers []*proto.Header
-}
-
-func NewHeaderList() HeaderList {
-	return HeaderList{
-		headers: []*proto.Header{},
-	}
-}
-
-func (h *HeaderList) Add(header *proto.Header) error {
-	h.headers = append(h.headers, header)
-	return nil
-}
-
-func (h *HeaderList) Len() int {
-	return len(h.headers)
-}
-
-func (h *HeaderList) Height() int {
-	return len(h.headers) - 1
-}
-
-func (h *HeaderList) GetByIdx(idx int) *proto.Header {
-	if idx > h.Height() {
-		panic("index out of range")
-	}
-	return h.headers[idx]
-}
-
 type UTXO struct {
 	Hash     string
 	OutIndex int
@@ -51,18 +21,20 @@ type UTXO struct {
 }
 
 type Chain struct {
-	blockStore BlockStore
-	headers    HeaderList
-	utxoStore  UTXOStore
-	txStore    TxStore
+	blockStore    BlockStore
+	headers       HeaderStore
+	utxoStore     UTXOStore
+	txStore       TxStore
+	outputStorage OutputStorage
 }
 
-func NewChain(bs BlockStore, hl HeaderList, txx TxStore, us UTXOStore) Chain {
+func NewChain(bs BlockStore, hs HeaderStore, txx TxStore, us UTXOStore, os OutputStorage) Chain {
 	chain := Chain{
-		blockStore: bs,
-		headers:    hl,
-		utxoStore:  us,
-		txStore:    txx,
+		blockStore:    bs,
+		headers:       hs,
+		utxoStore:     us,
+		txStore:       txx,
+		outputStorage: os,
 	}
 	chain.addBlock(chain.createGensisBlock())
 	return chain
@@ -80,7 +52,9 @@ func (c *Chain) AddBlock(b *proto.Block) error {
 }
 
 func (c *Chain) addBlock(b *proto.Block) error {
-	c.headers.Add(b.Header)
+	if err := c.headers.Put(b.Header); err != nil {
+		return err
+	}
 	for _, tx := range b.Transactions {
 		if err := c.txStore.Put(tx); err != nil {
 			return err
@@ -98,6 +72,18 @@ func (c *Chain) addBlock(b *proto.Block) error {
 			}
 
 		}
+		for _, input := range tx.Inputs {
+			key := fmt.Sprintf("%s_%d", hex.EncodeToString(input.PrevTxHash), input.PrevOutIndex)
+			utxo, err := c.utxoStore.Get(key)
+			if err != nil {
+				return err
+			}
+			utxo.Spent = true
+
+			if err = c.utxoStore.Put(utxo); err != nil {
+				return err
+			}
+		}
 	}
 	return c.blockStore.Put(b)
 }
@@ -112,7 +98,11 @@ func (c *Chain) GetBlockByHeight(h int) (*proto.Block, error) {
 		return nil, errors.New("block doesn't exists")
 	}
 
-	header := c.headers.GetByIdx(h)
+	header, err := c.headers.GetByIdx(h)
+	if err != nil {
+		return nil, err
+	}
+
 	hash := types.HashHeader(header)
 
 	block, err := c.GetBlockByHash(hash)

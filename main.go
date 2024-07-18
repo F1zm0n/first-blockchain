@@ -22,18 +22,18 @@ func main() {
 
 	pk := crypto.NewPrivateKey()
 
-	nodeServ := node.New(sl, node.NewMemPool(), node.ServerConfig{
+	nodeServ := node.New(sl, node.NewMemoryMemPool(), node.ServerConfig{
 		Version:    "blocker-0.1",
 		ListenAddr: ":3000",
 		PrivateKey: &pk,
 	})
 
-	nodeCli := node.New(sl, node.NewMemPool(), node.ServerConfig{
+	nodeCli := node.New(sl, node.NewMemoryMemPool(), node.ServerConfig{
 		Version:    "blocker-0.1",
 		ListenAddr: ":4000",
 	})
 
-	nodeBack := node.New(sl, node.NewMemPool(), node.ServerConfig{
+	nodeBack := node.New(sl, node.NewMemoryMemPool(), node.ServerConfig{
 		Version:    "blocker-0.1",
 		ListenAddr: ":5000",
 	})

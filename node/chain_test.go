@@ -7,6 +7,7 @@ import (
 	"github.com/F1zm0n/blocker/proto"
 	"github.com/F1zm0n/blocker/types"
 	"github.com/F1zm0n/blocker/util"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ func randomBlock(t *testing.T, chain Chain) *proto.Block {
 
 func TestNewChain(t *testing.T) {
 	var (
-		chain = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
 		r     = require.New(t)
 	)
 	r.Equal(0, chain.Height())
@@ -36,7 +37,7 @@ func TestNewChain(t *testing.T) {
 
 func TestChainHeight(t *testing.T) {
 	var (
-		chain = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
 		count = 99
 	)
 
@@ -53,7 +54,7 @@ func TestChainHeight(t *testing.T) {
 
 func TestAddBlock(t *testing.T) {
 	var (
-		chain = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
 		block = randomBlock(t, chain)
 		err   = chain.AddBlock(block)
 	)
@@ -62,7 +63,7 @@ func TestAddBlock(t *testing.T) {
 
 func TestGetBlockByHeight(t *testing.T) {
 	var (
-		chain = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
 		block = randomBlock(t, chain)
 		err   = chain.AddBlock(block)
 	)
@@ -75,7 +76,7 @@ func TestGetBlockByHeight(t *testing.T) {
 
 func TestGetBlock(t *testing.T) {
 	var (
-		chain = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
 		block = randomBlock(t, chain)
 		err   = chain.AddBlock(block)
 	)
@@ -88,7 +89,7 @@ func TestGetBlock(t *testing.T) {
 
 func TestAddBlockWithTX_InsufficientFunds(t *testing.T) {
 	var (
-		chain     = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain     = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
 		block     = randomBlock(t, chain)
 		privKey   = crypto.NewPrivateKeyFromHex(baseSeed)
 		recipient = crypto.NewPrivateKey().Public().Address().Bytes()
@@ -129,8 +130,101 @@ func TestAddBlockWithTX_InsufficientFunds(t *testing.T) {
 }
 
 func TestAddBlockWithTx(t *testing.T) {
+
 	var (
-		chain     = NewChain(NewMemoryBlockStore(), NewHeaderList(), NewMemoryTxStore(), NewMemoryUTXOStore())
+		chain     = NewChain(NewMemoryBlockStore(), NewMemoryHeaderStore(), NewMemoryTxStore(), NewMemoryUTXOStore(), NewMemoryOutputStorage())
+		block     = randomBlock(t, chain)
+		privKey   = crypto.NewPrivateKeyFromHex(baseSeed)
+		recipient = crypto.NewPrivateKey().Public().Address().Bytes()
+	)
+
+	prevTx, err := chain.txStore.Get("26e6f153537363b3ad45aba45bc2b815c7e8226ea513b63351bd2061aa76c400")
+	require.NoError(t, err)
+
+	var (
+		inputs = []*proto.TxInput{
+			{
+				PrevTxHash:   types.HashTransaction(prevTx),
+				PrevOutIndex: 0,
+				PublicKey:    privKey.Public().Bytes(),
+			},
+		}
+		outputs = []*proto.TxOutput{
+			{
+				Amount:  100,
+				Address: recipient,
+			},
+			{
+				Amount:  900,
+				Address: privKey.Public().Address().Bytes(),
+			},
+		}
+		tx = &proto.Transaction{
+			Version: 1,
+			Inputs:  inputs,
+			Outputs: outputs,
+		}
+	)
+	sig := types.SignTransaction(privKey, tx)
+	tx.Inputs[0].Signature = sig.Bytes()
+
+	block.Transactions = append(block.Transactions, tx)
+	types.SignBlock(privKey, block)
+
+	require.NoError(t, chain.AddBlock(block))
+}
+
+func TestAddBlockWithTxBadger(t *testing.T) {
+	var (
+		r          = require.New(t)
+		blockOpts  = badger.DefaultOptions("/tmp/block/")
+		headerOpts = badger.DefaultOptions("/tmp/header/")
+		txOpts     = badger.DefaultOptions("/tmp/tx/")
+		utxoOpts   = badger.DefaultOptions("/tmp/utxo/")
+		outputOpts = badger.DefaultOptions("/tmp/output/")
+	)
+	blockOpts.Logger = nil
+	headerOpts.Logger = nil
+	txOpts.Logger = nil
+	utxoOpts.Logger = nil
+	outputOpts.Logger = nil
+
+	blockDb, err := badger.Open(blockOpts)
+	r.NoError(err)
+	headerDb, err := badger.Open(headerOpts)
+	r.NoError(err)
+	txDb, err := badger.Open(txOpts)
+	r.NoError(err)
+	utxoDb, err := badger.Open(utxoOpts)
+	r.NoError(err)
+	outputDb, err := badger.Open(outputOpts)
+	r.NoError(err)
+
+	t.Cleanup(func() {
+		blockDb.DropAll()
+		blockDb.Close()
+
+		headerDb.DropAll()
+		headerDb.Close()
+
+		txDb.DropAll()
+		txDb.Close()
+
+		utxoDb.DropAll()
+		utxoDb.Close()
+
+		outputDb.DropAll()
+		outputDb.Close()
+	})
+
+	var (
+		chain = NewChain(
+			NewBadgerBlockStore(blockDb),
+			NewBadgerHeaderStore(headerDb),
+			NewBadgerTxStore(txDb),
+			NewBadgerUTXOStore(utxoDb),
+			NewBadgerOutputStorage(outputDb),
+		)
 		block     = randomBlock(t, chain)
 		privKey   = crypto.NewPrivateKeyFromHex(baseSeed)
 		recipient = crypto.NewPrivateKey().Public().Address().Bytes()
