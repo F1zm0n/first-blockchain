@@ -2,12 +2,26 @@ syntax = "proto3";
 
 option go_package = "github.com/F1zm0n/blocker/proto";
 
-service Node{
-  rpc Handshake (Version) returns (Version);
-  rpc HandleTransaction (Transaction) returns (Ack);
+service Node {
+  rpc Handshake(Version) returns (Version);
+  rpc HandleTransaction(Transaction) returns (Ack);
 }
 
-message Version{
+service PosConsensus {
+  rpc Stake(StakeRequest) returns (Ack);
+  rpc ChooseValidator(ValidatorRequest) returns (Ack);
+}
+
+
+message StakeRequest {
+  int64 amount = 1;
+  bytes address = 2;
+  Version metadata = 3;
+}
+
+message ValidatorRequest {}
+
+message Version {
   string version = 1;
   int32 height = 2;
   string listenAddr = 3;
@@ -15,7 +29,6 @@ message Version{
 }
 
 message Ack {}
-
 
 message Block {
   Header header = 1;
@@ -32,7 +45,7 @@ message Header {
   int64 timestamp = 5;
 }
 
-message TxInput{
+message TxInput {
   // The previous hash of the tx containing
   // the output we want to spend.
   bytes prev_tx_hash = 1;

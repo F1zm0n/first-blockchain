@@ -139,3 +139,125 @@ var Node_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "proto/types.proto",
 }
+
+// PosConsensusClient is the client API for PosConsensus service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type PosConsensusClient interface {
+	Stake(ctx context.Context, in *StakeRequest, opts ...grpc.CallOption) (*Ack, error)
+	ChooseValidator(ctx context.Context, in *ValidatorRequest, opts ...grpc.CallOption) (*Ack, error)
+}
+
+type posConsensusClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPosConsensusClient(cc grpc.ClientConnInterface) PosConsensusClient {
+	return &posConsensusClient{cc}
+}
+
+func (c *posConsensusClient) Stake(ctx context.Context, in *StakeRequest, opts ...grpc.CallOption) (*Ack, error) {
+	out := new(Ack)
+	err := c.cc.Invoke(ctx, "/PosConsensus/Stake", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *posConsensusClient) ChooseValidator(ctx context.Context, in *ValidatorRequest, opts ...grpc.CallOption) (*Ack, error) {
+	out := new(Ack)
+	err := c.cc.Invoke(ctx, "/PosConsensus/ChooseValidator", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PosConsensusServer is the server API for PosConsensus service.
+// All implementations must embed UnimplementedPosConsensusServer
+// for forward compatibility
+type PosConsensusServer interface {
+	Stake(context.Context, *StakeRequest) (*Ack, error)
+	ChooseValidator(context.Context, *ValidatorRequest) (*Ack, error)
+	mustEmbedUnimplementedPosConsensusServer()
+}
+
+// UnimplementedPosConsensusServer must be embedded to have forward compatible implementations.
+type UnimplementedPosConsensusServer struct {
+}
+
+func (UnimplementedPosConsensusServer) Stake(context.Context, *StakeRequest) (*Ack, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Stake not implemented")
+}
+func (UnimplementedPosConsensusServer) ChooseValidator(context.Context, *ValidatorRequest) (*Ack, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChooseValidator not implemented")
+}
+func (UnimplementedPosConsensusServer) mustEmbedUnimplementedPosConsensusServer() {}
+
+// UnsafePosConsensusServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PosConsensusServer will
+// result in compilation errors.
+type UnsafePosConsensusServer interface {
+	mustEmbedUnimplementedPosConsensusServer()
+}
+
+func RegisterPosConsensusServer(s grpc.ServiceRegistrar, srv PosConsensusServer) {
+	s.RegisterService(&PosConsensus_ServiceDesc, srv)
+}
+
+func _PosConsensus_Stake_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StakeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PosConsensusServer).Stake(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/PosConsensus/Stake",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PosConsensusServer).Stake(ctx, req.(*StakeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PosConsensus_ChooseValidator_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidatorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PosConsensusServer).ChooseValidator(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/PosConsensus/ChooseValidator",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PosConsensusServer).ChooseValidator(ctx, req.(*ValidatorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PosConsensus_ServiceDesc is the grpc.ServiceDesc for PosConsensus service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PosConsensus_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "PosConsensus",
+	HandlerType: (*PosConsensusServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Stake",
+			Handler:    _PosConsensus_Stake_Handler,
+		},
+		{
+			MethodName: "ChooseValidator",
+			Handler:    _PosConsensus_ChooseValidator_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "proto/types.proto",
+}
